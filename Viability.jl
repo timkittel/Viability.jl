@@ -1,13 +1,17 @@
 
+
+@everywhere begin
 using Base
 using NearestNeighbors
 
 # type definitions
 @everywhere COORDINATE_TYPE = Float64
 @everywhere POINT_TYPE = Array{COORDINATE_TYPE,1}
-@everywhere POINTS_ARRAY_TYPE = Array{COORDINATE_TYPE,2} # SharedArray
-STATE_TYPE = UInt8
+# @everywhere POINTS_ARRAY_TYPE = SharedArray{COORDINATE_TYPE,2}
+@everywhere POINTS_ARRAY_TYPE = Array{COORDINATE_TYPE,2}
+@everywhere STATE_TYPE = UInt8
 STATE_ARRAY_TYPE = Array{STATE_TYPE}
+@everywhere SHARED_STATE_ARRAY_TYPE = SharedArray{STATE_TYPE}
 
 # computational globals
 MAX_SP_VIABILITY_ITERATION_STEPS = 100
@@ -192,39 +196,36 @@ function _sp_viability_kernel(
 
     # create a kdtree that is used for the find the surrounding indices during the computation
     kdtree = KDTree(points; leafsize=leafsize)
+    inp_states = states
+    states = convert(SharedArray, states)
 
-    changed = true
+    # changed = true
     retval = 1 # unsuccesful
     for it = 1:MAX_SP_VIABILITY_ITERATION_STEPS
         println("start iteration $it")
-        changed = false
-        # for i = 1:n
-        for i = 1:n
+        changed =  @parallel (|) for i = 1:n
             # check whether the state of i is a work state and if yes find the index
             work_state_index = findfirst(work_states, states[i])
-            ####################################
-            point = points[:, i]
-            debugging = false
-            if point[1] < 0.03 && point[2] > 0.97
-                println("DEBUGGIN MODE point $point")
-                debugging = true
-            end
-            ####################################
             if work_state_index != 0
                 # yes, it is a work state
 
                 old_state = states[i] # save it for the comparison later
+                # states[i] = _sp_get_new_state(i, points, states, step_functions, kdtree,
+                #     good_states=good_states,
+                #     work_states=work_states,
+                #     successful_states=successful_states,
+                #     unsuccessful_states=unsuccessful_states,
+                #     delta=delta
+                # )
                 found_good_state = false
                 for sf in step_functions
                     next_point = sf(points[:, i])
                     surrounding_indices = inrange(kdtree, next_point, delta, false)
-                    if debugging
-                        println("sf $sf")
-                        println("next_point $next_point")
-                        s = states[surrounding_indices]
-                        println("surrounding states $s")
-                        ps = points[:, surrounding_indices]
-                        println("surround points $ps")
+                    if isempty(surrounding_indices)
+                        # if debugging
+                        #     println("no surrounding indices, taking closest")
+                        # end
+                        surrounding_indices = knn(kdtree, next_point, 1)[1]
                     end
                     if intersects(states[surrounding_indices], good_states)
                         found_good_state = true
@@ -235,15 +236,10 @@ function _sp_viability_kernel(
                 if !found_good_state
                     states[i] = unsuccessful_states[work_state_index]
                 end
-                if debugging
-                    # error("interrupt")
-                end
-                # check whether anything changed
-                if old_state != states[i]
-                    changed = true
-                end
+                old_state != states[i] # did something change?
+            else
+                false # return that nothing changed
             end
-            true
         end
         println("stop iteration $it")
         if !changed # nothing changed? yay, I am done
@@ -251,10 +247,38 @@ function _sp_viability_kernel(
             retval = 0 # succesfully finished
             break
         end
-        true
     end
+    inp_states[:] = states
     return retval
 end
+
+# function _sp_get_new_state(
+#     i::Int64,
+#     points::POINTS_ARRAY_TYPE,
+#     states::SHARED_STATE_ARRAY_TYPE,
+#     kdtree::SHARED_STATE_ARRAY_TYPE,
+#     step_functions::Array;
+#     good_states::STATE_ARRAY_TYPE=RequiredArgument("good_states"),
+#     work_states::STATE_ARRAY_TYPE=RequiredArgument("work_states"),
+#     successful_states::STATE_ARRAY_TYPE=RequiredArgument("successful_states"),
+#     unsuccessful_states::STATE_ARRAY_TYPE=RequiredArgument("unsuccessful_states"),
+#     delta::COORDINATE_TYPE=RequiredArgument("delta")
+#     )
+#     for sf in step_functions
+#         next_point = sf(points[:, i])
+#         surrounding_indices = inrange(kdtree, next_point, delta, false)
+#         if isempty(surrounding_indices)
+#             # take the closest point if there was none found in the delta-neighborhood of next_point
+#             surrounding_indices = knn(kdtree, next_point, 1)[1]
+#         end
+#         if intersects(states[surrounding_indices], good_states)
+#             found_good_state = true
+#             return successful_states[work_state_index]
+#         end
+#     end
+#     # no good state found, so return the unsuccesful
+#     unsuccessful_states[work_state_index]
+# end
 
 function write_result_file(fname, model_info, points, states, delim="; ")
     # check the input for correctness and consistency
@@ -273,3 +297,5 @@ function write_result_file(fname, model_info, points, states, delim="; ")
         end
     end
 end
+
+end #@everywhere

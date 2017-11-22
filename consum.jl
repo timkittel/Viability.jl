@@ -33,8 +33,8 @@ model_info = Dict{String,Any}(
     "model-params" => model_params
 )
 
-RET_ARRAY=COORDINATE_TYPE[0, 0]
-function consum_rhs(xy, u)
+@everywhere RET_ARRAY=COORDINATE_TYPE[0, 0]
+@everywhere function consum_rhs(xy, u)
     RET_ARRAY[1] = xy[1] - xy[2]
     RET_ARRAY[2] = u
     return RET_ARRAY
@@ -58,16 +58,15 @@ end
 
 points = create_normalized_2d_grid(num_per_dim)
 states = map_over_points(STATE_TYPE, normalized_is_sunny, points)
-# states = ones(STATE_TYPE, num_total)
+@time ret = sp_viability_kernel(
+    points,
+    states,
+    step_functions,
+    delta=delta_ball
+)
 
-# x = COORDINATE_TYPE[0.2, 0.4]
-# println("start evaluations")
-# println(rhss[1](x))
-# println("x $x")
-# println(ndims(x), " ", size(x))
-# println(rhss_transformed[1](x))
-
-
+points = create_normalized_2d_grid(num_per_dim)
+states = map_over_points(STATE_TYPE, normalized_is_sunny, points)
 @time ret = sp_viability_kernel(
     points,
     states,
