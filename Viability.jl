@@ -1,5 +1,6 @@
 
 using Base
+using NearestNeighbors
 
 # type definitions
 @everywhere COORDINATE_TYPE = Float64
@@ -177,7 +178,8 @@ function _sp_viability_kernel(
         work_states::STATE_ARRAY_TYPE=RequiredArgument("work_states"),
         successful_states::STATE_ARRAY_TYPE=RequiredArgument("successful_states"),
         unsuccessful_states::STATE_ARRAY_TYPE=RequiredArgument("unsuccessful_states"),
-        delta::COORDINATE_TYPE=RequiredArgument("delta")
+        delta::COORDINATE_TYPE=RequiredArgument("delta"),
+        leafsize=10
     )
     # check the input for correctness and consistency
     @assert ndims(points) == 2
@@ -187,6 +189,9 @@ function _sp_viability_kernel(
     @assert size(states, 1) == n
     @assert size(successful_states) == size(work_states)
     @assert size(unsuccessful_states) == size(work_states)
+
+    # create a kdtree that is used for the find the surrounding indices during the computation
+    kdtree = KDTree(points; leafsize=leafsize)
 
     changed = true
     retval = 1 # unsuccesful
@@ -212,7 +217,7 @@ function _sp_viability_kernel(
                 found_good_state = false
                 for sf in step_functions
                     next_point = sf(points[:, i])
-                    surrounding_indices = get_indices_of_neighbors_in_ball(next_point, points, delta)
+                    surrounding_indices = inrange(kdtree, next_point, delta, false)
                     if debugging
                         println("sf $sf")
                         println("next_point $next_point")

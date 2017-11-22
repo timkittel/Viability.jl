@@ -4,10 +4,10 @@ include("Viability.jl")
 OUTFILENAME = "consum.txt"
 
 dim = 2
-num_per_dim = unsigned(101)
+num_per_dim = unsigned(80)
 stepsize=1/(num_per_dim-1)
 println("stepsize $stepsize")
-delta_t = 6*stepsize
+delta_t = 7*stepsize
 println("delta_t $delta_t")
 delta_ball = 1.5*stepsize
 println("delta_ball $delta_ball")
