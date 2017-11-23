@@ -1,16 +1,14 @@
 
 
-@everywhere begin
 using Base
-using NearestNeighbors
+@everywhere using NearestNeighbors
 
 # type definitions
 @everywhere COORDINATE_TYPE = Float64
 @everywhere POINT_TYPE = Array{COORDINATE_TYPE,1}
-# @everywhere POINTS_ARRAY_TYPE = SharedArray{COORDINATE_TYPE,2}
 @everywhere POINTS_ARRAY_TYPE = Array{COORDINATE_TYPE,2}
 @everywhere STATE_TYPE = UInt8
-STATE_ARRAY_TYPE = Array{STATE_TYPE}
+@everywhere STATE_ARRAY_TYPE = Array{STATE_TYPE}
 @everywhere SHARED_STATE_ARRAY_TYPE = SharedArray{STATE_TYPE}
 
 # computational globals
@@ -211,7 +209,7 @@ function _sp_viability_kernel(
                 # yes, it is a work state
 
                 old_state = states[i] # save it for the comparison later
-                # evaluate which new state 
+                # evaluate which new state
                 states[i] = _sp_get_new_state(
                     work_state_index, points[:, i], states, step_functions, kdtree,
                     good_states=good_states,
@@ -235,7 +233,7 @@ function _sp_viability_kernel(
     return retval
 end
 
-@inline function _sp_get_new_state(
+@everywhere @inline function _sp_get_new_state(
     work_state_index::Int64,
     point::POINT_TYPE,
     states::SHARED_STATE_ARRAY_TYPE,
@@ -279,5 +277,3 @@ function write_result_file(fname, model_info, points, states, delim="; ")
         end
     end
 end
-
-end #@everywhere
