@@ -196,6 +196,7 @@ function _sp_viability_kernel(
 
     # create a kdtree that is used for the find the surrounding indices during the computation
     kdtree = KDTree(points; leafsize=leafsize)
+    println("type kdtree $(typeof(kdtree))")
     inp_states = states
     states = convert(SharedArray, states)
 
@@ -210,32 +211,14 @@ function _sp_viability_kernel(
                 # yes, it is a work state
 
                 old_state = states[i] # save it for the comparison later
-                # states[i] = _sp_get_new_state(i, points, states, step_functions, kdtree,
-                #     good_states=good_states,
-                #     work_states=work_states,
-                #     successful_states=successful_states,
-                #     unsuccessful_states=unsuccessful_states,
-                #     delta=delta
-                # )
-                found_good_state = false
-                for sf in step_functions
-                    next_point = sf(points[:, i])
-                    surrounding_indices = inrange(kdtree, next_point, delta, false)
-                    if isempty(surrounding_indices)
-                        # if debugging
-                        #     println("no surrounding indices, taking closest")
-                        # end
-                        surrounding_indices = knn(kdtree, next_point, 1)[1]
-                    end
-                    if intersects(states[surrounding_indices], good_states)
-                        found_good_state = true
-                        states[i] = successful_states[work_state_index]
-                        break
-                    end
-                end
-                if !found_good_state
-                    states[i] = unsuccessful_states[work_state_index]
-                end
+                # evaluate which new state 
+                states[i] = _sp_get_new_state(
+                    work_state_index, points[:, i], states, step_functions, kdtree,
+                    good_states=good_states,
+                    successful_states=successful_states,
+                    unsuccessful_states=unsuccessful_states,
+                    delta=delta
+                )
                 old_state != states[i] # did something change?
             else
                 false # return that nothing changed
@@ -252,33 +235,32 @@ function _sp_viability_kernel(
     return retval
 end
 
-# function _sp_get_new_state(
-#     i::Int64,
-#     points::POINTS_ARRAY_TYPE,
-#     states::SHARED_STATE_ARRAY_TYPE,
-#     kdtree::SHARED_STATE_ARRAY_TYPE,
-#     step_functions::Array;
-#     good_states::STATE_ARRAY_TYPE=RequiredArgument("good_states"),
-#     work_states::STATE_ARRAY_TYPE=RequiredArgument("work_states"),
-#     successful_states::STATE_ARRAY_TYPE=RequiredArgument("successful_states"),
-#     unsuccessful_states::STATE_ARRAY_TYPE=RequiredArgument("unsuccessful_states"),
-#     delta::COORDINATE_TYPE=RequiredArgument("delta")
-#     )
-#     for sf in step_functions
-#         next_point = sf(points[:, i])
-#         surrounding_indices = inrange(kdtree, next_point, delta, false)
-#         if isempty(surrounding_indices)
-#             # take the closest point if there was none found in the delta-neighborhood of next_point
-#             surrounding_indices = knn(kdtree, next_point, 1)[1]
-#         end
-#         if intersects(states[surrounding_indices], good_states)
-#             found_good_state = true
-#             return successful_states[work_state_index]
-#         end
-#     end
-#     # no good state found, so return the unsuccesful
-#     unsuccessful_states[work_state_index]
-# end
+@inline function _sp_get_new_state(
+    work_state_index::Int64,
+    point::POINT_TYPE,
+    states::SHARED_STATE_ARRAY_TYPE,
+    step_functions::Array,
+    kdtree::NearestNeighbors.KDTree;
+    good_states::STATE_ARRAY_TYPE=RequiredArgument("good_states"),
+    successful_states::STATE_ARRAY_TYPE=RequiredArgument("successful_states"),
+    unsuccessful_states::STATE_ARRAY_TYPE=RequiredArgument("unsuccessful_states"),
+    delta::COORDINATE_TYPE=RequiredArgument("delta")
+    )
+    for sf in step_functions
+        next_point = sf(point)
+        surrounding_indices = inrange(kdtree, next_point, delta, false)
+        if isempty(surrounding_indices)
+            # take the closest point if there was none found in the delta-neighborhood of next_point
+            surrounding_indices = knn(kdtree, next_point, 1)[1]
+        end
+        if intersects(states[surrounding_indices], good_states)
+            found_good_state = true
+            return successful_states[work_state_index]
+        end
+    end
+    # no good state found, so return the unsuccesful state
+    unsuccessful_states[work_state_index]
+end
 
 function write_result_file(fname, model_info, points, states, delim="; ")
     # check the input for correctness and consistency
