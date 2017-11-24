@@ -1,12 +1,12 @@
 
 # start up kernels if not already done
-if Sys.CPU_CORES > nworkers()
-    if nworkers() == 1
-        addprocs(Sys.CPU_CORES)
-    else
-        addprocs(Sys.CPU_CORES - nworkers())
-    end
-end
+# if Sys.CPU_CORES > nworkers()
+#     if nworkers() == 1
+#         addprocs(Sys.CPU_CORES)
+#     else
+#         addprocs(Sys.CPU_CORES - nworkers())
+#     end
+# end
 
 include("Viability.jl")
 
@@ -69,6 +69,7 @@ end
 mode = sp_mparallel
 # mode = sp_recursive
 # mode = sp_parallel
+
 
 points = create_normalized_2d_grid(num_per_dim)
 states = map_over_points(STATE_TYPE, normalized_is_sunny, points)

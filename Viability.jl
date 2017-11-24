@@ -108,6 +108,33 @@ function spatial_normalization(
     end
 end
 
+function spatial_compactification(
+        f,
+        xi_mid::COORDINATE_TYPE,
+        axis::Int
+    )
+    function f_compactified(y)
+        x = copy(y)
+        x[axis] = y[axis] * xi_mid / (1-y[axis])
+        p = copy(y)
+        p[axis] = (1-y[axis])^2 / xi_mid
+        p*f(x)
+    end
+end
+
+function spatial_compactification(
+    f,
+    x_mid::POINT_TYPE,
+    axes::Array{Int,1}
+    )
+    @assert len(x_mid) == len(axes)
+    for (xi_mid, axis) in zip(xs_mid, axes)
+        f = spatial_compactification(f, xi_mid, axis)
+    end
+    f
+end
+
+
 function rhs2stepfct(rhs, delta_t)
     function stepfct(x)
         x + rhs(x)*delta_t
