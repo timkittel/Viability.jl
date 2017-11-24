@@ -1,10 +1,19 @@
-include("Viability.jl")
 
+# start up kernels if not already done
+if Sys.CPU_CORES > nworkers()
+    if nworkers() == 1
+        addprocs(Sys.CPU_CORES)
+    else
+        addprocs(Sys.CPU_CORES - nworkers())
+    end
+end
+
+include("Viability.jl")
 
 OUTFILENAME = "consum.txt"
 
 dim = 2
-num_per_dim = unsigned(80)
+num_per_dim = unsigned(401)
 stepsize=1/(num_per_dim-1)
 println("stepsize $stepsize")
 delta_t = 7*stepsize
@@ -51,10 +60,15 @@ rhss_transformed =
 step_functions = map(f->rhs2stepfct(f, delta_t), rhss_transformed)
 
 function normalized_is_sunny(x)
+    # set only the boundary dark
     lower = stepsize / 2
     upper = 1-lower
     x[1] > lower && x[2] > lower && x[1] < upper && x[2] < upper
 end
+
+mode = sp_mparallel
+# mode = sp_recursive
+# mode = sp_parallel
 
 points = create_normalized_2d_grid(num_per_dim)
 states = map_over_points(STATE_TYPE, normalized_is_sunny, points)
@@ -62,7 +76,9 @@ states = map_over_points(STATE_TYPE, normalized_is_sunny, points)
     points,
     states,
     step_functions,
-    delta=delta_ball
+    delta=delta_ball,
+    computation_mode=mode,
+    r=delta_t
 )
 
 points = create_normalized_2d_grid(num_per_dim)
@@ -71,7 +87,9 @@ states = map_over_points(STATE_TYPE, normalized_is_sunny, points)
     points,
     states,
     step_functions,
-    delta=delta_ball
+    delta=delta_ball,
+    computation_mode=mode,
+    r=delta_t
 )
 
 actual_points = points2bounds(points, bounds)
