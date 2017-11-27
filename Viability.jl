@@ -2,7 +2,7 @@
 
 using Base
 @everywhere using NearestNeighbors
-using DataStructures
+# using DataStructures
 
 # type definitions
 @everywhere COORDINATE_TYPE = Float64
