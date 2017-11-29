@@ -417,11 +417,6 @@ STATE_IDENTIFICATION_TSM = Dict{String,STATE_TYPE}(
     "trench" => 13
 )
 
-
-
-
-
-
 function write_result_file(fname, model_info, points, states, delim="; ")
     # check the input for correctness and consistency
     @assert ndims(points) == 2
