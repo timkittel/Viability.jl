@@ -1,19 +1,26 @@
 
-# start up kernels if not already done
-# if Sys.CPU_CORES > nworkers()
-#     if nworkers() == 1
-#         addprocs(Sys.CPU_CORES)
-#     else
-#         addprocs(Sys.CPU_CORES - nworkers())
-#     end
-# end
 
-include("Viability.jl")
+# include("Viability.jl")
+@everywhere include("Viability.jl")
+
+@everywhere using Viability:
+    COORDINATE_TYPE,
+    STATE_TYPE,
+    create_normalized_2d_grid,
+    map_over_points,
+    rhs2stepfct,
+    sp_mparallel,
+    sp_parallel,
+    sp_viability_kernel,
+    spatial_normalization,
+    temporal_homogenization,
+    points2bounds,
+    write_result_file
 
 OUTFILENAME = "consum.txt"
 
 dim = 2
-num_per_dim = unsigned(401)
+num_per_dim = unsigned(201)
 stepsize=1/(num_per_dim-1)
 println("stepsize $stepsize")
 delta_t = 7*stepsize
@@ -67,7 +74,6 @@ function normalized_is_sunny(x)
 end
 
 mode = sp_mparallel
-# mode = sp_recursive
 # mode = sp_parallel
 
 

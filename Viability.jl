@@ -1,18 +1,20 @@
 
 
+module Viability
+
 using Base
-@everywhere using NearestNeighbors
-# using DataStructures
+using NearestNeighbors
 
 # type definitions
-@everywhere COORDINATE_TYPE = Float64
-@everywhere POINT_TYPE = Array{COORDINATE_TYPE,1}
-@everywhere POINTS_ARRAY_TYPE = Array{COORDINATE_TYPE,2}
-@everywhere STATE_TYPE = UInt8
-@everywhere STATE_ARRAY_TYPE = Array{STATE_TYPE,1}
-@everywhere SHARED_STATE_ARRAY_TYPE = SharedArray{STATE_TYPE,1}
+COORDINATE_TYPE = Float64
+POINT_TYPE = Array{COORDINATE_TYPE,1}
+POINTS_ARRAY_TYPE = Array{COORDINATE_TYPE,2}
+STATE_TYPE = UInt8
+STATE_ARRAY_TYPE = Array{STATE_TYPE,1}
+STATE_ARRAY_ARGUMENT_TYPE = AbstractArray{STATE_TYPE,1}
+SHARED_STATE_ARRAY_TYPE = SharedArray{STATE_TYPE,1}
 
-@enum SP_COMPUTATION_TYPE sp_parallel sp_recursive sp_mparallel
+@enum SP_COMPUTATION_TYPE sp_parallel sp_mparallel
 
 # computational globals
 MAX_SP_VIABILITY_ITERATION_STEPS = 100
@@ -143,7 +145,7 @@ function rhs2stepfct(rhs, delta_t)
 end
 
 
-@everywhere function get_indices_of_neighbors_in_ball(
+function get_indices_of_neighbors_in_ball(
     point::POINT_TYPE,
     points::POINTS_ARRAY_TYPE,
     epsilon::COORDINATE_TYPE # radius of the ball
@@ -158,7 +160,7 @@ end
     neighbor_indices = find(diffs .< epsilon^2)
 end
 
-@everywhere function intersects(a::Array, b::Array)
+function intersects(a::Array, b::Array)
     for i=1:size(a, 1), j=1:size(b, 1)
         if a[i] == b[j]
             return true
@@ -169,35 +171,29 @@ end
 
 function sp_viability_kernel(
         points::POINTS_ARRAY_TYPE,
-        states::STATE_ARRAY_TYPE,
+        states::STATE_ARRAY_ARGUMENT_TYPE,
         step_functions::Array;
-        good_states::STATE_ARRAY_TYPE=STATE_TYPE[1],
-        bad_states::STATE_ARRAY_TYPE=STATE_TYPE[0],
-        computation_mode::SP_COMPUTATION_TYPE=sp_parallel,
+        good_states::STATE_ARRAY_ARGUMENT_TYPE=STATE_TYPE[1],
+        bad_states::STATE_ARRAY_ARGUMENT_TYPE=STATE_TYPE[0],
+        computation_mode::SP_COMPUTATION_TYPE=sp_mparallel,
         delta::COORDINATE_TYPE=RequiredArgument("delta"),
         r::COORDINATE_TYPE=0.0,
+        leafsize=10
     )
+    ret_val = 2
+
+    # create a kdtree that is used for the find the surrounding indices during the computation
+    kdtree = KDTree(points; leafsize=leafsize)
+    # create a shared array copy of states for parallelization
+    inp_states = states
+    states = convert(SharedArray, states)
     if computation_mode == sp_parallel
-        return _sp_viability_kernel_parallel(points, states, step_functions,
+        ret_val = _sp_viability_kernel_parallel(points, states, step_functions, kdtree,
             good_states=good_states,
             unsuccessful_states=bad_states,
             successful_states=good_states,
             work_states=good_states,
             delta=delta
-        )
-    elseif computation_mode == sp_recursive
-        if r == 0.0
-            RequiredArgument(
-                "r",
-                "If unsure, choose r to be the (maximal) step length of the step_function.")
-        end
-        return _sp_viability_kernel_recursive(points, states, step_functions,
-            good_states=good_states,
-            unsuccessful_states=bad_states,
-            successful_states=good_states,
-            work_states=good_states,
-            delta=delta,
-            r=r
         )
     elseif computation_mode == sp_mparallel
         if r == 0.0
@@ -205,8 +201,7 @@ function sp_viability_kernel(
                 "r",
                 "If unsure, choose r to be the (maximal) step length of the step_function.")
         end
-
-        return _sp_viability_kernel_mparallel(points, states, step_functions,
+        ret_val = _sp_viability_kernel_mparallel(points, states, step_functions, kdtree,
             good_states=good_states,
             unsuccessful_states=bad_states,
             successful_states=good_states,
@@ -217,6 +212,9 @@ function sp_viability_kernel(
     else
         throw(ArgumentError("unknown computation_mode=$computation_mode"))
     end
+    # copy back from shared array
+    inp_states[:] = states
+    return ret_val
 end
 
 function sp_capture_basin(
@@ -237,108 +235,18 @@ function sp_capture_basin(
     )
 end
 
-function _sp_viability_kernel_recursive(
-        points::POINTS_ARRAY_TYPE,
-        states::STATE_ARRAY_TYPE,
-        step_functions::Array;
-        good_states::STATE_ARRAY_TYPE=RequiredArgument("good_states"),
-        work_states::STATE_ARRAY_TYPE=RequiredArgument("work_states"),
-        successful_states::STATE_ARRAY_TYPE=RequiredArgument("successful_states"),
-        unsuccessful_states::STATE_ARRAY_TYPE=RequiredArgument("unsuccessful_states"),
-        delta::COORDINATE_TYPE=RequiredArgument("delta"),
-        r::COORDINATE_TYPE=RequiredArgument("r"),
-        leafsize=10
-    )
-
-    # check the input for correctness and consistency
-    @assert ndims(points) == 2
-    @assert ndims(states) == 1
-    dim = size(points,1)
-    n = size(points,2)
-    @assert size(states, 1) == n
-    @assert size(successful_states) == size(work_states)
-    @assert size(unsuccessful_states) == size(work_states)
-
-    @assert delta > 0
-    @assert r > delta
-
-    # create a kdtree that is used for the find the surrounding indices during the computation
-    kdtree = KDTree(points; leafsize=leafsize)
-    # inp_states = states
-    # states = convert(SharedArray, states)
-
-    r_min = r - delta - 0.01
-    r_max = r + delta + 0.01
-    println("r_min $r_min")
-    println("r_max $r_max")
-
-    # Set the maximum number of possible steps to the same as for the
-    # iterative/parallel mode. As it counts every single points here, the
-    # maximal number should be multiplied with n
-    max_sp_viability_recursion_steps = MAX_SP_VIABILITY_ITERATION_STEPS * n
-    # the following list contains at all times the indices that still
-    # need to be checked. I.e. an empty working_indices list means the
-    # computation is over
-    working_indices = collect(1:n) # initialize with all indices
-    # sizehint!(working_indices, 2*n)
-    for it = 1:max_sp_viability_recursion_steps
-        if isempty(working_indices)
-            # yay, I am done
-            break
-        end
-        i = working_indices[1]
-        deleteat!(working_indices, 1)
-        work_state_index = findfirst(work_states, states[i])
-        if work_state_index != 0
-            # yes, it is a work state
-            point = points[:, i]
-
-            old_state = states[i] # save it for the comparison later
-            # evaluate which new state
-            states[i] = _sp_get_new_state(
-                work_state_index, point, states, step_functions, kdtree,
-                good_states=good_states,
-                successful_states=successful_states,
-                unsuccessful_states=unsuccessful_states,
-                delta=delta
-            )
-            if old_state != states[i] # did something change?)
-                # add (the indices of) all points with a distance between r_min and r_max,
-                # because these are the only ones that could reach points[:, i]
-                surrounding_indices = inrange(kdtree, point, r_max, false)
-                distances = map( index->norm(points[:, index] - point), surrounding_indices )
-                for (new_index, new_distance) in zip(surrounding_indices, distances)
-                    if new_distance > r_min &&
-                            states[new_index] in work_states && # it's a work state
-                            findlast(working_indices, new_index) == 0 # not yet inside, search from behind
-                        append!(working_indices, new_index)
-                    end
-                end
-            end
-        end
-    end
-    # inp_states[:] = states
-    retval = 1 # unsuccesful
-    if isempty(working_indices)
-        retval = 0 # succesfully finished
-    end
-    return retval
-end
-
 function _sp_viability_kernel_mparallel(
         points::POINTS_ARRAY_TYPE,
-        states::STATE_ARRAY_TYPE,
-        step_functions::Array;
-        good_states::STATE_ARRAY_TYPE=RequiredArgument("good_states"),
-        work_states::STATE_ARRAY_TYPE=RequiredArgument("work_states"),
-        successful_states::STATE_ARRAY_TYPE=RequiredArgument("successful_states"),
-        unsuccessful_states::STATE_ARRAY_TYPE=RequiredArgument("unsuccessful_states"),
+        states::STATE_ARRAY_ARGUMENT_TYPE,
+        step_functions::Array,
+        kdtree::NearestNeighbors.KDTree;
+        good_states::STATE_ARRAY_ARGUMENT_TYPE=RequiredArgument("good_states"),
+        work_states::STATE_ARRAY_ARGUMENT_TYPE=RequiredArgument("work_states"),
+        successful_states::STATE_ARRAY_ARGUMENT_TYPE=RequiredArgument("successful_states"),
+        unsuccessful_states::STATE_ARRAY_ARGUMENT_TYPE=RequiredArgument("unsuccessful_states"),
         delta::COORDINATE_TYPE=RequiredArgument("delta"),
-        r::COORDINATE_TYPE=RequiredArgument("r"),
-        leafsize=10
+        r::COORDINATE_TYPE=RequiredArgument("r")
     )
-    println("running mparrallel with $(nworkers()) workers")
-    println(nprocs())
     # check the input for correctness and consistency
     @assert ndims(points) == 2
     @assert ndims(states) == 1
@@ -348,13 +256,9 @@ function _sp_viability_kernel_mparallel(
     @assert size(successful_states) == size(work_states)
     @assert size(unsuccessful_states) == size(work_states)
 
-    # create a kdtree that is used for the find the surrounding indices during the computation
-    kdtree = KDTree(points; leafsize=leafsize)
-    # create a shared array copy of states for parallelization
-    inp_states = states
-    states = convert(SharedArray, states)
     # compute r_min and r_max
     r_min = r - delta - 0.01
+    # TODO: check whether r_min really makes sense
     r_max = r + delta + 0.01
     println("r_min $r_min")
     println("r_max $r_max")
@@ -408,21 +312,19 @@ function _sp_viability_kernel_mparallel(
             end
         end
     end
-    # copy back from shared array
-    inp_states[:] = states
     return retval
 end
 
 function _sp_viability_kernel_parallel(
         points::POINTS_ARRAY_TYPE,
-        states::STATE_ARRAY_TYPE,
-        step_functions::Array;
-        good_states::STATE_ARRAY_TYPE=RequiredArgument("good_states"),
-        work_states::STATE_ARRAY_TYPE=RequiredArgument("work_states"),
-        successful_states::STATE_ARRAY_TYPE=RequiredArgument("successful_states"),
-        unsuccessful_states::STATE_ARRAY_TYPE=RequiredArgument("unsuccessful_states"),
-        delta::COORDINATE_TYPE=RequiredArgument("delta"),
-        leafsize=10
+        states::STATE_ARRAY_ARGUMENT_TYPE,
+        step_functions::Array,
+        kdtree::NearestNeighbors.KDTree;
+        good_states::STATE_ARRAY_ARGUMENT_TYPE=RequiredArgument("good_states"),
+        work_states::STATE_ARRAY_ARGUMENT_TYPE=RequiredArgument("work_states"),
+        successful_states::STATE_ARRAY_ARGUMENT_TYPE=RequiredArgument("successful_states"),
+        unsuccessful_states::STATE_ARRAY_ARGUMENT_TYPE=RequiredArgument("unsuccessful_states"),
+        delta::COORDINATE_TYPE=RequiredArgument("delta")
     )
     # check the input for correctness and consistency
     @assert ndims(points) == 2
@@ -432,11 +334,6 @@ function _sp_viability_kernel_parallel(
     @assert size(states, 1) == n
     @assert size(successful_states) == size(work_states)
     @assert size(unsuccessful_states) == size(work_states)
-
-    # create a kdtree that is used for the find the surrounding indices during the computation
-    kdtree = KDTree(points; leafsize=leafsize)
-    inp_states = states
-    states = convert(SharedArray, states)
 
     # changed = true
     retval = 1 # unsuccesful
@@ -468,11 +365,10 @@ function _sp_viability_kernel_parallel(
             break
         end
     end
-    inp_states[:] = states
     return retval
 end
 
-@everywhere @inline function _sp_get_new_state(
+@inline function _sp_get_new_state(
     work_state_index::Int64,
     point::POINT_TYPE,
     states::AbstractArray{STATE_TYPE,1},
@@ -499,6 +395,33 @@ end
     unsuccessful_states[work_state_index]
 end
 
+STATE_IDENTIFICATION_VIABILITY_KERNEL = Dict{String,STATE_TYPE}(
+    "good" => 1,
+    "bad" => 0
+)
+
+STATE_IDENTIFICATION_TSM = Dict{String,STATE_TYPE}(
+    "unknown" => 0,
+    "shelter" => 1,
+    "glade" => 2,
+    "lake" => 3,
+    "remaining sunny upstream" => 4,
+    "dark upstream" => 5,
+    "backwaters" => 6,
+    "remaining sunny downstream" => 7,
+    "dark downstream" => 8,
+    "sunny eddies" => 9,
+    "dark eddies" => 10,
+    "sunny abyss" => 11,
+    "dark abyss" => 12,
+    "trench" => 13
+)
+
+
+
+
+
+
 function write_result_file(fname, model_info, points, states, delim="; ")
     # check the input for correctness and consistency
     @assert ndims(points) == 2
@@ -515,4 +438,6 @@ function write_result_file(fname, model_info, points, states, delim="; ")
             write(f, "$point$delim$state\n")
         end
     end
+end
+
 end
